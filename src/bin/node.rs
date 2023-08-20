@@ -13,7 +13,10 @@ async fn main() -> anyhow::Result<()> {
     let (tx, mut rx) = mpsc::channel::<Message>(32);
 
     tokio::task::spawn(async move {
-        read_messages(stream, tx).await.unwrap();
+        match read_messages(stream, tx).await {
+            Ok(_) => println!("Connection closed"),
+            Err(e) => println!("Connection closed with error: {:?}", e),
+        };
     });
 
     loop {
