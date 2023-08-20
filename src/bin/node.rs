@@ -12,27 +12,28 @@ async fn main() -> anyhow::Result<()> {
 
     let (tx, mut rx) = mpsc::channel::<Message>(32);
 
-    tokio::task::spawn(async move {
+    let read_task = tokio::task::spawn(async move {
         match read_messages(stream, tx).await {
             Ok(_) => println!("Connection closed"),
             Err(e) => println!("Connection closed with error: {:?}", e),
         };
     });
 
-    loop {
-        match rx.recv().await {
-            Some(msg) => match msg.payload {
-                scylla::Payload::Archive(archive) => {
-                    println!("Received archive: {:?}", archive);
-                    handle_archive(archive).await?;
-                }
-            },
-            None => {
-                println!("Exiting");
+    while let Some(msg) = rx.recv().await {
+        match msg.payload {
+            scylla::Payload::Archive(archive) => {
+                println!("Received archive");
+                handle_archive(archive).await?;
+            }
+            scylla::Payload::Shutdown => {
+                println!("Received shutdown");
                 break;
             }
         }
     }
+
+    read_task.abort();
+    println!("Exiting");
 
     Ok(())
 }
@@ -42,19 +43,18 @@ async fn read_messages(
     msg_queue: mpsc::Sender<Message>,
 ) -> anyhow::Result<()> {
     loop {
-        stream.readable().await.context("Stream not readable")?;
-
         match Message::read(&mut stream).await {
-            Ok(msg) => {
-                println!("Received message");
+            Ok(Some(msg)) => {
+                println!("Received message {msg:?}");
 
                 msg_queue
                     .send(msg)
                     .await
-                    .context("Failed to add message to queue")?
+                    .context("Failed to add message to queue")?;
             }
+            Ok(None) => {}
             Err(e) => {
-                return Err(e).context("Failed to read message");
+                println!("Failed to read message: {:?}", e);
             }
         };
     }

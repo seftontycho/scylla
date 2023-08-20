@@ -1,4 +1,4 @@
-use scylla::{Archive, Message, Payload};
+use scylla::{Message, Payload};
 use std::path::Path;
 use tokio::{io::AsyncReadExt, net::TcpStream};
 use uuid::Uuid;
@@ -13,7 +13,7 @@ async fn main() -> anyhow::Result<()> {
     let mut buf = Vec::new();
     file.read_to_end(&mut buf).await?;
 
-    let payload = Payload::Archive(Archive {
+    let payload = Payload::Archive(scylla::Archive {
         id: Uuid::new_v4(),
         data: buf,
     });
@@ -21,7 +21,11 @@ async fn main() -> anyhow::Result<()> {
     let msg = Message::new(payload);
 
     println!("Sending message: {:?}", msg);
+    msg.write(&mut stream).await?;
 
+    let msg = Message::new(Payload::Shutdown);
+
+    println!("Sending message: {:?}", msg);
     msg.write(&mut stream).await?;
 
     Ok(())
