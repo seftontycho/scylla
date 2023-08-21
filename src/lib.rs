@@ -65,6 +65,7 @@ impl Message {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
+#[non_exhaustive]
 pub enum Payload {
     Shutdown,
     Archive(Archive),

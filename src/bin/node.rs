@@ -29,6 +29,9 @@ async fn main() -> anyhow::Result<()> {
                 println!("Received shutdown");
                 break;
             }
+            _ => {
+                println!("Received unknown message");
+            }
         }
     }
 
