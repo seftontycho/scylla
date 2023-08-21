@@ -1,3 +1,5 @@
+use std::io;
+
 use anyhow::Context;
 use scylla::Message;
 use tokio::io::AsyncWriteExt;
@@ -57,8 +59,17 @@ async fn read_messages(
                     .await
                     .context("Failed to add message to queue")?;
             }
+            // if we get a tokio::ErrorKind::UnexpectedEof error we break otherwise print the error
             Err(e) => {
-                println!("Failed to read message: {:?}", e);
+                if let Some(io_err) = e.downcast_ref::<io::Error>() {
+                    if io_err.kind() == io::ErrorKind::UnexpectedEof {
+                        break;
+                    } else {
+                        println!("Failed to read message: {:?}", e);
+                    }
+                } else {
+                    println!("Failed to read message: {:?}", e);
+                }
             }
         };
     }
