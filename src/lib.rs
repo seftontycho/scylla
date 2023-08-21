@@ -1,18 +1,17 @@
-use std::path::Path;
-
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter, ReadBuf},
-    macros::support::poll_fn,
+    io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
     net::TcpStream,
 };
 use uuid::Uuid;
 
+/*
 pub struct Metadata {
     time_sent: u64,
     destination: String,
 }
+*/
 
 #[derive(Debug)]
 pub struct Message {
@@ -43,6 +42,7 @@ impl Message {
         let size = stream.peek(&mut buf).await?;
 
         if size < 4 {
+            println!("Not enough data to read: {size} bytes");
             return Ok(None);
         }
 

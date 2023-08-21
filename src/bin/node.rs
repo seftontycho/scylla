@@ -42,7 +42,8 @@ async fn read_messages(
     mut stream: TcpStream,
     msg_queue: mpsc::Sender<Message>,
 ) -> anyhow::Result<()> {
-    loop {
+    // this is here because it spins and prints real fast and then we can't see the other messages
+    for _ in 0..100 {
         match Message::read(&mut stream).await {
             Ok(Some(msg)) => {
                 println!("Received message {msg:?}");
@@ -58,6 +59,7 @@ async fn read_messages(
             }
         };
     }
+    Ok(())
 }
 
 async fn handle_archive(archive: scylla::Archive) -> anyhow::Result<()> {
