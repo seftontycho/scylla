@@ -10,10 +10,11 @@ async fn main() -> anyhow::Result<()> {
     let (stream, addr) = listener.accept().await.context("Failed to accept tcp")?;
     println!("New incoming connection on {addr}");
 
+    let reader = tokio::io::BufReader::new(stream);
     let (tx, mut rx) = mpsc::channel::<Message>(32);
 
     let read_task = tokio::task::spawn(async move {
-        match read_messages(stream, tx).await {
+        match read_messages(reader, tx).await {
             Ok(_) => println!("Connection closed"),
             Err(e) => println!("Connection closed with error: {:?}", e),
         };
@@ -42,13 +43,13 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn read_messages(
-    mut stream: TcpStream,
+    mut reader: tokio::io::BufReader<TcpStream>,
     msg_queue: mpsc::Sender<Message>,
 ) -> anyhow::Result<()> {
     // this is here because it spins and prints real fast and then we can't see the other messages
     for _ in 0..100 {
-        match Message::read(&mut stream).await {
-            Ok(Some(msg)) => {
+        match Message::read(&mut reader).await {
+            Ok(msg) => {
                 println!("Received message {msg:?}");
 
                 msg_queue
@@ -56,7 +57,6 @@ async fn read_messages(
                     .await
                     .context("Failed to add message to queue")?;
             }
-            Ok(None) => {}
             Err(e) => {
                 println!("Failed to read message: {:?}", e);
             }
