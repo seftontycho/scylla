@@ -49,7 +49,7 @@ async fn read_messages(
     msg_queue: mpsc::Sender<Message>,
 ) -> anyhow::Result<()> {
     // this is here because it spins and prints real fast and then we can't see the other messages
-    for _ in 0..100 {
+    loop {
         match Message::read(&mut reader).await {
             Ok(msg) => {
                 println!("Received message {msg:?}");
@@ -63,17 +63,14 @@ async fn read_messages(
             Err(e) => {
                 if let Some(io_err) = e.downcast_ref::<io::Error>() {
                     if io_err.kind() == io::ErrorKind::UnexpectedEof {
-                        break;
-                    } else {
-                        println!("Failed to read message: {:?}", e);
+                        return Ok(());
                     }
-                } else {
-                    println!("Failed to read message: {:?}", e);
                 }
+
+                return Err(e).context("Failed to read message");
             }
         };
     }
-    Ok(())
 }
 
 async fn handle_archive(archive: scylla::Archive) -> anyhow::Result<()> {
