@@ -1,44 +1,43 @@
-use scylla::{Message, Payload};
+use scylla::connection::{Message, Metadata, Payload};
+use std::net::SocketAddr;
 use std::path::Path;
-use tokio::{io::AsyncReadExt, net::TcpStream};
-use uuid::Uuid;
+use tokio::net::TcpStream;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    bundle_dir(Path::new("./testfolder"), Path::new("./tmp/bundle.tar.gz")).await?;
+    println!("Connecting to node");
+    let dst = SocketAddr::from(([127, 0, 0, 1], 8080));
+    let mut stream = TcpStream::connect(dst).await?;
+    let src = stream.local_addr()?;
+    println!("Connected to node");
 
-    let mut file = tokio::fs::File::open("./tmp/bundle.tar.gz").await?;
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf).await?;
+    println!("Compressing archive");
+    let archive = scylla::archive::compress_dir(Path::new("./testproject"))?;
+    let archive_id = archive.id;
 
-    let mut stream = TcpStream::connect("127.0.0.1:8080").await?;
     let mut writer = tokio::io::BufWriter::new(&mut stream);
 
-    let payload = Payload::Archive(scylla::Archive {
-        id: Uuid::new_v4(),
-        data: buf,
-    });
-
-    let msg = Message::new(payload);
+    let metadata = Metadata::new(src, dst);
+    let payload = Payload::Archive(archive);
+    let msg = Message::new(metadata, payload);
 
     println!("Sending message: {:?}", msg);
     msg.write(&mut writer).await?;
 
-    let msg = Message::new(Payload::Shutdown);
+    let metadata = Metadata::new(src, dst);
+    let task = scylla::task::Task::new(archive_id, "main".to_owned(), vec![]);
+    let payload = Payload::RunTask(task);
+    let msg = Message::new(metadata, payload);
 
     println!("Sending message: {:?}", msg);
     msg.write(&mut writer).await?;
 
-    Ok(())
-}
+    let metadata = Metadata::new(src, dst);
+    let payload = Payload::Shutdown;
+    let msg = Message::new(metadata, payload);
 
-async fn bundle_dir(in_path: &Path, out_path: &Path) -> anyhow::Result<()> {
-    let tar_gz = std::fs::File::create(out_path)?;
-    let enc = flate2::write::GzEncoder::new(tar_gz, flate2::Compression::default());
-    let mut tar = tar::Builder::new(enc);
-
-    tar.append_dir_all(in_path, in_path)?;
-    tar.finish()?;
+    println!("Sending message: {:?}", msg);
+    msg.write(&mut writer).await?;
 
     Ok(())
 }

@@ -1,8 +1,5 @@
-use std::io;
-
 use anyhow::Context;
-use scylla::Message;
-use tokio::io::AsyncWriteExt;
+use std::io;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 
@@ -13,7 +10,7 @@ async fn main() -> anyhow::Result<()> {
     println!("New incoming connection on {addr}");
 
     let reader = tokio::io::BufReader::new(stream);
-    let (tx, mut rx) = mpsc::channel::<Message>(32);
+    let (tx, mut rx) = mpsc::channel::<scylla::connection::Message>(32);
 
     let read_task = tokio::task::spawn(async move {
         match read_messages(reader, tx).await {
@@ -24,11 +21,16 @@ async fn main() -> anyhow::Result<()> {
 
     while let Some(msg) = rx.recv().await {
         match msg.payload {
-            scylla::Payload::Archive(archive) => {
+            scylla::connection::Payload::Archive(archive) => {
                 println!("Received archive");
-                handle_archive(archive).await?;
+                scylla::archive::store_archive(&archive).await?;
             }
-            scylla::Payload::Shutdown => {
+            scylla::connection::Payload::RunTask(task) => {
+                println!("Received task");
+                let result = task.run().await?;
+                println!("Task result: {:?}", result);
+            }
+            scylla::connection::Payload::Shutdown => {
                 println!("Received shutdown");
                 break;
             }
@@ -46,11 +48,11 @@ async fn main() -> anyhow::Result<()> {
 
 async fn read_messages(
     mut reader: tokio::io::BufReader<TcpStream>,
-    msg_queue: mpsc::Sender<Message>,
+    msg_queue: mpsc::Sender<scylla::connection::Message>,
 ) -> anyhow::Result<()> {
     // this is here because it spins and prints real fast and then we can't see the other messages
     loop {
-        match Message::read(&mut reader).await {
+        match scylla::connection::Message::read(&mut reader).await {
             Ok(msg) => {
                 println!("Received message {msg:?}");
 
@@ -71,26 +73,4 @@ async fn read_messages(
             }
         };
     }
-}
-
-async fn handle_archive(archive: scylla::Archive) -> anyhow::Result<()> {
-    let filepath = format!("./tmp/{}.tar.gz", archive.id);
-
-    let mut file = tokio::fs::File::create(&filepath).await?;
-    file.write_all(&archive.data).await?;
-    file.flush().await?;
-
-    decompress_archive(&filepath, format!("./tmp/{}", archive.id).as_str())
-        .context("Failed to decompress archive")?;
-
-    Ok(())
-}
-
-fn decompress_archive(inpath: &str, out_path: &str) -> anyhow::Result<()> {
-    let tar_gz = std::fs::File::open(inpath).context("Failed to open file")?;
-    let tar = flate2::read::GzDecoder::new(tar_gz);
-    let mut archive = tar::Archive::new(tar);
-    archive.unpack(out_path).context("Failed to unpack file")?;
-
-    Ok(())
 }
