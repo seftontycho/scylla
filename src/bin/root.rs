@@ -32,12 +32,12 @@ async fn main() -> anyhow::Result<()> {
     println!("Sending message: {:?}", msg);
     msg.write(&mut writer).await?;
 
-    let metadata = Metadata::new(src, dst);
-    let payload = Payload::Shutdown;
-    let msg = Message::new(metadata, payload);
+    // let metadata = Metadata::new(src, dst);
+    // let payload = Payload::Shutdown;
+    // let msg = Message::new(metadata, payload);
 
-    println!("Sending message: {:?}", msg);
-    msg.write(&mut writer).await?;
+    // println!("Sending message: {:?}", msg);
+    // msg.write(&mut writer).await?;
 
     Ok(())
 }

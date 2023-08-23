@@ -3,12 +3,14 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
-use std::io::Cursor;
+
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use std::path::PathBuf;
+
+use fasthash::{sea::Hash64, FastHash};
+
 use std::{
-    collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
     path::Path,
 };
@@ -34,16 +36,10 @@ impl Debug for Archive {
 impl Archive {
     pub fn new(data: Vec<u8>) -> Self {
         Self {
-            id: hash_data(&data),
+            id: Hash64::hash_with_seed(&data, (0, 0, 0, 0)),
             data,
         }
     }
-}
-
-fn hash_data(data: &[u8]) -> u64 {
-    let mut s = DefaultHasher::new();
-    data.hash(&mut s);
-    s.finish()
 }
 
 pub fn compress_dir(in_path: &Path) -> anyhow::Result<Archive> {
@@ -53,7 +49,7 @@ pub fn compress_dir(in_path: &Path) -> anyhow::Result<Archive> {
         let encoder = GzEncoder::new(&mut compressed_data, flate2::Compression::default());
         let mut tar = tar::Builder::new(encoder);
 
-        tar.append_dir_all(in_path, in_path)?;
+        tar.append_dir_all("", in_path)?;
         tar.finish()?;
     }
 
@@ -62,10 +58,8 @@ pub fn compress_dir(in_path: &Path) -> anyhow::Result<Archive> {
 
 pub async fn uncompress_archive(archive: &Archive) -> anyhow::Result<()> {
     let output_path = Path::new(UNCOMPRESSED_DIR).join(format!("{}", archive.id));
-    println!("uncompress output path: {:?}", output_path);
 
     if !output_path.exists() {
-        println!("uncompressing archive");
         tokio::fs::create_dir_all(&output_path).await?;
 
         let decoder = GzDecoder::new(&archive.data[..]);
@@ -95,13 +89,9 @@ pub async fn load_archive(archive_id: u64) -> anyhow::Result<Archive> {
     let archive_dir = Path::new(ARCHIVE_DIR);
     let archive_path = archive_dir.join(format!("{}.tar.gz", archive_id));
 
-    println!("Loading archive: {:?}", archive_path);
-
     let mut file = tokio::fs::File::open(&archive_path).await?;
     let mut data = Vec::new();
     file.read_to_end(&mut data).await?;
-
-    println!("archive data: {:?}", data);
 
     Ok(Archive::new(data))
 }
