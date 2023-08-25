@@ -56,8 +56,7 @@ impl Message {
             .await
             .context("Failed to read payload")?;
 
-        let serialized = String::from_utf8(buf).context("Failed to convert to String")?;
-        let message = serde_json::from_str(&serialized).context("Failed to deserialize")?;
+        let message = serde_json::from_slice(&buf).context("Failed to deserialize")?;
 
         Ok(message)
     }

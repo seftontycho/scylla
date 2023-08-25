@@ -4,8 +4,6 @@ use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
 use std::path::PathBuf;
 
 use fasthash::{sea::Hash64, FastHash};
@@ -75,8 +73,7 @@ pub async fn store_archive(archive: &Archive) -> anyhow::Result<PathBuf> {
 
     if !archive_path.exists() {
         tokio::fs::create_dir_all(archive_dir).await?;
-        let mut file = tokio::fs::File::create(&archive_path).await?;
-        file.write_all(&archive.data).await?;
+        tokio::fs::write(&archive_path, &archive.data).await?;
     }
 
     Ok(archive_path)
@@ -93,9 +90,9 @@ pub async fn load_archive(archive_id: u64) -> anyhow::Result<Archive> {
     let archive_dir = Path::new(ARCHIVE_DIR);
     let archive_path = archive_dir.join(format!("{}.tar.gz", archive_id));
 
-    let mut file = tokio::fs::File::open(&archive_path).await?;
-    let mut data = Vec::new();
-    file.read_to_end(&mut data).await?;
+    let data = tokio::fs::read(archive_path)
+        .await
+        .context("Cannot read from file")?;
 
     Ok(Archive::new(data))
 }
