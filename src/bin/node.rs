@@ -60,13 +60,13 @@ async fn handle_messages(
                 }
             }
             scylla::connection::Payload::RunTask(task) => {
-                if scylla::archive::archive_exists(task.archive_id).await {
+                if scylla::archive::archive_exists(task.archive_id) {
                     let result = task.run().await?;
                     println!("Task result: {:?}", result);
                 } else {
-                    let msg = scylla::connection::Message {
-                        payload: scylla::connection::Payload::RequestArchive(task.archive_id),
-                    };
+                    let msg = scylla::connection::Message::new(
+                        scylla::connection::Payload::RequestArchive(task.archive_id),
+                    );
 
                     task_queue.insert(task.archive_id, task);
 

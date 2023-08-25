@@ -29,6 +29,7 @@ impl Debug for Archive {
 }
 
 impl Archive {
+    #[must_use]
     pub fn new(data: Vec<u8>) -> Self {
         Self {
             id: Hash64::hash_with_seed(&data, (0, 0, 0, 0)),
@@ -79,9 +80,10 @@ pub async fn store_archive(archive: &Archive) -> anyhow::Result<PathBuf> {
     Ok(archive_path)
 }
 
-pub async fn archive_exists(archive_id: u64) -> bool {
+#[must_use]
+pub fn archive_exists(archive_id: u64) -> bool {
     let archive_dir = Path::new(ARCHIVE_DIR);
-    let archive_path = archive_dir.join(format!("{}.tar.gz", archive_id));
+    let archive_path = archive_dir.join(format!("{archive_id}.tar.gz"));
 
     archive_path.exists()
 }

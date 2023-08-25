@@ -1,47 +1,30 @@
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
-pub struct Metadata {
-    message_id: Uuid,
-    time_sent: chrono::DateTime<chrono::Utc>,
-    src: std::net::SocketAddr,
-    dst: std::net::SocketAddr,
-}
-
-impl Metadata {
-    pub fn new<S: Into<std::net::SocketAddr>, D: Into<std::net::SocketAddr>>(
-        src: S,
-        dst: D,
-    ) -> Self {
-        Self {
-            message_id: Uuid::new_v4(),
-            time_sent: chrono::Utc::now(),
-            src: src.into(),
-            dst: dst.into(),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub struct Message {
     // metadata: Metadata,
     pub payload: Payload,
 }
 
 impl Message {
-    pub fn new(payload: Payload) -> Self {
+    #[inline]
+    #[must_use]
+    pub const fn new(payload: Payload) -> Self {
         Self { payload }
     }
 
+    #[inline]
     pub async fn write<T: Unpin + AsyncWriteExt>(&self, writer: &mut T) -> anyhow::Result<()> {
         let serialized = serde_json::to_string(&self).context("Failed to serialize")?;
         let serialized = serialized.as_bytes();
 
-        writer.write_u32_le(serialized.len() as u32).await?;
-        writer.write_all(&serialized).await?;
+        writer
+            .write_u32_le(u32::try_from(serialized.len())?)
+            .await?;
+        writer.write_all(serialized).await?;
         writer.flush().await?;
 
         Ok(())

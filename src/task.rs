@@ -11,6 +11,8 @@ pub struct Task {
 }
 
 impl Task {
+    #[inline]
+    #[must_use]
     pub fn new(archive_id: u64, binary_name: String, arguments: Vec<String>) -> Self {
         Self {
             id: uuid::Uuid::new_v4(),
@@ -27,7 +29,7 @@ impl Task {
 
         let build_output = tokio::process::Command::new("cargo")
             .current_dir(&path)
-            .args(&["run", "--release"])
+            .args(["run", "--release"])
             .output()
             .await?;
 
