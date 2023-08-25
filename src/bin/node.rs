@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 async fn main() -> anyhow::Result<()> {
     loop {
         let listener = TcpListener::bind("127.0.0.1:8080").await?;
-        let (mut stream, addr) = listener.accept().await.context("Failed to accept tcp")?;
+        let (stream, addr) = listener.accept().await.context("Failed to accept tcp")?;
         println!("New incoming connection on {addr}");
 
         let (read, write) = stream.into_split();

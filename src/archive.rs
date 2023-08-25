@@ -10,10 +10,7 @@ use std::path::PathBuf;
 
 use fasthash::{sea::Hash64, FastHash};
 
-use std::{
-    hash::{Hash, Hasher},
-    path::Path,
-};
+use std::path::Path;
 
 const ARCHIVE_DIR: &str = "./store/archives";
 const UNCOMPRESSED_DIR: &str = "./store/uncompressed";

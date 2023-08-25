@@ -1,14 +1,11 @@
-use scylla::connection::{Message, Metadata, Payload};
-use std::net::SocketAddr;
+use scylla::connection::{Message, Payload};
 use std::path::Path;
 use tokio::net::TcpStream;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     println!("Connecting to node");
-    let dst = SocketAddr::from(([127, 0, 0, 1], 8080));
-    let mut stream = TcpStream::connect(dst).await?;
-    let src = stream.local_addr()?;
+    let mut stream = TcpStream::connect("127.0.0.1:8080").await?;
     println!("Connected to node");
 
     println!("Compressing archive");
