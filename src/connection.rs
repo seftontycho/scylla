@@ -27,13 +27,13 @@ impl Metadata {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct Message {
-    metadata: Metadata,
+    // metadata: Metadata,
     pub payload: Payload,
 }
 
 impl Message {
-    pub fn new(metadata: Metadata, payload: Payload) -> Self {
-        Self { metadata, payload }
+    pub fn new(payload: Payload) -> Self {
+        Self { payload }
     }
 
     pub async fn write<T: Unpin + AsyncWriteExt>(&self, writer: &mut T) -> anyhow::Result<()> {
@@ -70,4 +70,5 @@ pub enum Payload {
     Shutdown,
     Archive(crate::archive::Archive),
     RunTask(crate::task::Task),
+    RequestArchive(u64),
 }

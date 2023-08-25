@@ -17,24 +17,21 @@ async fn main() -> anyhow::Result<()> {
 
     let mut writer = tokio::io::BufWriter::new(&mut stream);
 
-    let metadata = Metadata::new(src, dst);
     let payload = Payload::Archive(archive);
-    let msg = Message::new(metadata, payload);
+    let msg = Message::new(payload);
 
     println!("Sending message: {:?}", msg);
     msg.write(&mut writer).await?;
 
-    let metadata = Metadata::new(src, dst);
     let task = scylla::task::Task::new(archive_id, "main".to_owned(), vec![]);
     let payload = Payload::RunTask(task);
-    let msg = Message::new(metadata, payload);
+    let msg = Message::new(payload);
 
     println!("Sending message: {:?}", msg);
     msg.write(&mut writer).await?;
 
-    // let metadata = Metadata::new(src, dst);
     // let payload = Payload::Shutdown;
-    // let msg = Message::new(metadata, payload);
+    // let msg = Message::new(payload);
 
     // println!("Sending message: {:?}", msg);
     // msg.write(&mut writer).await?;

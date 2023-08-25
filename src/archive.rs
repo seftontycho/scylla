@@ -85,6 +85,13 @@ pub async fn store_archive(archive: &Archive) -> anyhow::Result<PathBuf> {
     Ok(archive_path)
 }
 
+pub async fn archive_exists(archive_id: u64) -> bool {
+    let archive_dir = Path::new(ARCHIVE_DIR);
+    let archive_path = archive_dir.join(format!("{}.tar.gz", archive_id));
+
+    archive_path.exists()
+}
+
 pub async fn load_archive(archive_id: u64) -> anyhow::Result<Archive> {
     let archive_dir = Path::new(ARCHIVE_DIR);
     let archive_path = archive_dir.join(format!("{}.tar.gz", archive_id));
