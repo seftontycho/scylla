@@ -21,15 +21,15 @@ async fn main() -> anyhow::Result<()> {
 
         let read_task = tokio::task::spawn(async move {
             match read_messages(reader, read_queue_tx).await {
-                Ok(_) => println!("Connection closed"),
-                Err(e) => println!("Connection closed with error: {:?}", e),
+                Ok(_) => println!("Read connection closed"),
+                Err(e) => println!("Read connection closed with error: {:?}", e),
             };
         });
 
         let write_task = tokio::task::spawn(async move {
             match write_messages(writer, write_queue_rx).await {
-                Ok(_) => println!("Connection closed"),
-                Err(e) => println!("Connection closed with error: {:?}", e),
+                Ok(_) => println!("Write connection closed"),
+                Err(e) => println!("Write connection closed with error: {:?}", e),
             };
         });
 
@@ -94,15 +94,15 @@ async fn write_messages(
     mut writer: tokio::io::BufWriter<OwnedWriteHalf>,
     mut rx: mpsc::Receiver<scylla::connection::Message>,
 ) -> anyhow::Result<()> {
-    loop {
-        let msg = rx.recv().await.context("Failed to receive message")?;
-
+    while let Some(msg) = rx.recv().await {
         println!("Sending message {msg:?}");
 
         msg.write(&mut writer)
             .await
             .context("Failed to write message")?;
     }
+
+    Ok(())
 }
 
 async fn read_messages(
