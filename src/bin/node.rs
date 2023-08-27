@@ -1,8 +1,9 @@
 use anyhow::Context;
 use std::collections::HashMap;
-use std::io;
-use tokio::net::{tcp::OwnedReadHalf, tcp::OwnedWriteHalf, TcpListener};
+use tokio::net::TcpListener;
 use tokio::sync::mpsc;
+
+use scylla::connection::{read_messages, write_messages};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -57,15 +58,33 @@ async fn handle_messages(
                     let result = task.run().await?;
                     task_queue.remove(&archive.id);
                     println!("Task result: {:?}", result);
+                    let msg =
+                        scylla::connection::Message::new(scylla::connection::Payload::TaskResult {
+                            result,
+                        });
+                    write_queue
+                        .send(msg)
+                        .await
+                        .context("Failed to add message to write queue")?;
                 }
             }
             scylla::connection::Payload::RunTask(task) => {
                 if scylla::archive::archive_exists(task.archive_id) {
                     let result = task.run().await?;
                     println!("Task result: {:?}", result);
+                    let msg =
+                        scylla::connection::Message::new(scylla::connection::Payload::TaskResult {
+                            result,
+                        });
+                    write_queue
+                        .send(msg)
+                        .await
+                        .context("Failed to add message to write queue")?;
                 } else {
                     let msg = scylla::connection::Message::new(
-                        scylla::connection::Payload::RequestArchive(task.archive_id),
+                        scylla::connection::Payload::RequestArchive {
+                            id: task.archive_id,
+                        },
                     );
 
                     task_queue.insert(task.archive_id, task);
@@ -88,46 +107,4 @@ async fn handle_messages(
     }
 
     Ok(())
-}
-
-async fn write_messages(
-    mut writer: tokio::io::BufWriter<OwnedWriteHalf>,
-    mut rx: mpsc::Receiver<scylla::connection::Message>,
-) -> anyhow::Result<()> {
-    while let Some(msg) = rx.recv().await {
-        println!("Sending message {msg:?}");
-
-        msg.write(&mut writer)
-            .await
-            .context("Failed to write message")?;
-    }
-
-    Ok(())
-}
-
-async fn read_messages(
-    mut reader: tokio::io::BufReader<OwnedReadHalf>,
-    tx: mpsc::Sender<scylla::connection::Message>,
-) -> anyhow::Result<()> {
-    loop {
-        match scylla::connection::Message::read(&mut reader).await {
-            Ok(msg) => {
-                println!("Received message {msg:?}");
-
-                tx.send(msg)
-                    .await
-                    .context("Failed to add message to read queue")?;
-            }
-            // if we get a tokio::ErrorKind::UnexpectedEof error we break otherwise print the error
-            Err(e) => {
-                if let Some(io_err) = e.downcast_ref::<io::Error>() {
-                    if io_err.kind() == io::ErrorKind::UnexpectedEof {
-                        return Ok(());
-                    }
-                }
-
-                return Err(e).context("Failed to read message");
-            }
-        };
-    }
 }

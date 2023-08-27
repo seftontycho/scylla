@@ -1,6 +1,9 @@
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::tcp::{OwnedReadHalf, OwnedWriteHalf},
+};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[non_exhaustive]
@@ -51,6 +54,50 @@ impl Message {
 pub enum Payload {
     Shutdown,
     Archive(crate::archive::Archive),
+    RequestArchive { id: u64 },
+    ArchiveNotFound { id: u64 },
     RunTask(crate::task::Task),
-    RequestArchive(u64),
+    TaskResult { result: String },
+}
+
+pub async fn write_messages(
+    mut writer: tokio::io::BufWriter<OwnedWriteHalf>,
+    mut rx: tokio::sync::mpsc::Receiver<Message>,
+) -> anyhow::Result<()> {
+    while let Some(msg) = rx.recv().await {
+        println!("Sending message {msg:?}");
+
+        msg.write(&mut writer)
+            .await
+            .context("Failed to write message")?;
+    }
+
+    Ok(())
+}
+
+pub async fn read_messages(
+    mut reader: tokio::io::BufReader<OwnedReadHalf>,
+    tx: tokio::sync::mpsc::Sender<Message>,
+) -> anyhow::Result<()> {
+    loop {
+        match Message::read(&mut reader).await {
+            Ok(msg) => {
+                println!("Received message {msg:?}");
+
+                tx.send(msg)
+                    .await
+                    .context("Failed to add message to read queue")?;
+            }
+            // if we get a tokio::ErrorKind::UnexpectedEof error we break otherwise print the error
+            Err(e) => {
+                if let Some(io_err) = e.downcast_ref::<std::io::Error>() {
+                    if io_err.kind() == std::io::ErrorKind::UnexpectedEof {
+                        return Ok(());
+                    }
+                }
+
+                return Err(e).context("Failed to read message");
+            }
+        };
+    }
 }
