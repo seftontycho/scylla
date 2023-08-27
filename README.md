@@ -8,7 +8,8 @@ turn rust src into a tar.gz file -> send via tcp -> decompress -> run with cargo
 run `cargo run --bin node` and then run `cargo run --bin root` seperately
 
 # what is done so far
-compression, sending, decompressing, and running work
+compression, sending, decompressing, and running tasks, requesting archives, and sending results back
 
 # what needs to be done
-sending results back, requesting files from the root node, cli arg parsing etc
+1-many communication, proper logging and error handling, and a better TaskResult struct that can handle more than just strings.
+
