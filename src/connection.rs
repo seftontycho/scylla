@@ -60,12 +60,15 @@ pub enum Payload {
     TaskResult { result: String },
 }
 
+#[tracing::instrument(skip_all, name = "WRITE MESSAGES")]
 pub async fn write_messages(
     mut writer: tokio::io::BufWriter<OwnedWriteHalf>,
     mut rx: tokio::sync::mpsc::Receiver<Message>,
 ) -> anyhow::Result<()> {
+    tracing::info!("Starting");
+
     while let Some(msg) = rx.recv().await {
-        println!("Sending message {msg:?}");
+        tracing::info!("Sending message {msg:?}");
 
         msg.write(&mut writer)
             .await
@@ -75,14 +78,17 @@ pub async fn write_messages(
     Ok(())
 }
 
+#[tracing::instrument(skip_all, name = "READ MESSAGES")]
 pub async fn read_messages(
     mut reader: tokio::io::BufReader<OwnedReadHalf>,
     tx: tokio::sync::mpsc::Sender<Message>,
 ) -> anyhow::Result<()> {
+    tracing::info!("Starting");
+
     loop {
         match Message::read(&mut reader).await {
             Ok(msg) => {
-                println!("Received message {msg:?}");
+                tracing::info!("Received message {msg:?}");
 
                 tx.send(msg)
                     .await

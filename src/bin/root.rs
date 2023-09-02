@@ -17,7 +17,12 @@ struct Cli {
 }
 
 #[tokio::main]
+#[tracing::instrument]
 async fn main() -> anyhow::Result<()> {
+    let subscriber = tracing_subscriber::fmt().with_target(false).finish();
+
+    tracing::subscriber::set_global_default(subscriber)?;
+
     let args = Cli::parse();
 
     let ip = SocketAddr::from_str(&args.ip).context("Failed to parse ip address")?;
@@ -25,20 +30,20 @@ async fn main() -> anyhow::Result<()> {
     let path = Path::new(&args.path);
 
     if !path.exists() {
-        println!("Path does not exist");
+        tracing::error!("Path {:?} does not exist", path);
         return Ok(());
     }
 
     if !path.is_dir() {
-        println!("Path is not a directory");
+        tracing::error!("Path {:?} is not a directory", path);
         return Ok(());
     }
 
-    println!("Connecting to node: {ip:?}");
+    tracing::info!("Connecting to node: {ip:?}");
     let stream = TcpStream::connect(ip).await?;
-    println!("Connected to node");
+    tracing::info!("Connected to node: {ip:?}");
 
-    println!("Splitting Stream");
+    tracing::info!("Splitting Stream");
     let (read, write) = stream.into_split();
 
     let reader = tokio::io::BufReader::new(read);
@@ -49,20 +54,22 @@ async fn main() -> anyhow::Result<()> {
 
     let read_task = tokio::task::spawn(async move {
         match read_messages(reader, read_queue_tx).await {
-            Ok(_) => println!("Read connection closed"),
-            Err(e) => println!("Read connection closed with error: {:?}", e),
+            Ok(_) => tracing::info!("Read connection closed"),
+            Err(e) => tracing::error!("Read connection closed with error: {:?}", e),
         };
     });
 
     let write_task = tokio::task::spawn(async move {
         match write_messages(writer, write_queue_rx).await {
-            Ok(_) => println!("Write connection closed"),
-            Err(e) => println!("Write connection closed with error: {:?}", e),
+            Ok(_) => tracing::info!("Write connection closed"),
+            Err(e) => tracing::error!("Write connection closed with error: {:?}", e),
         };
     });
 
-    println!("Compressing archive");
+    tracing::info!("Compressing archive");
     let archive = scylla::archive::compress_dir(path)?;
+
+    tracing::info!("Storing archive");
     scylla::archive::store_archive(&archive).await?;
     let archive_id = archive.id;
 
@@ -75,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
     let payload = Payload::RunTask(task);
     let msg = Message::new(payload);
 
-    println!("Sending task to node");
+    tracing::info!("Sending task to node on {ip:?}");
     write_queue_tx.send(msg).await?;
 
     handle_messages(read_queue_rx, write_queue_tx).await?;
@@ -87,30 +94,39 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tracing::instrument(skip_all, name = "HANDLE MESSAGES")]
 async fn handle_messages(
     mut read_queue: mpsc::Receiver<Message>,
     write_queue: mpsc::Sender<Message>,
 ) -> anyhow::Result<Option<String>> {
+    tracing::info!("Starting");
+
     while let Some(msg) = read_queue.recv().await {
         match msg.payload {
             Payload::RequestArchive { id } => {
-                println!("Received request for archive {}", id);
+                tracing::info!("Received request for archive {}", id);
+
                 if scylla::archive::archive_exists(id) {
+                    tracing::info!("Archive {} exists", id);
                     let archive = scylla::archive::load_archive(id).await?;
                     let msg = Message::new(Payload::Archive(archive));
+
+                    tracing::info!("Sending archive {}", id);
                     write_queue.send(msg).await?;
                 } else {
-                    println!("Archive {} does not exist", id);
+                    tracing::info!("Archive {} does not exist", id);
                     let msg = Message::new(Payload::ArchiveNotFound { id });
+
+                    tracing::info!("Sending archive not found {}", id);
                     write_queue.send(msg).await?;
                 }
             }
             Payload::TaskResult { result } => {
-                println!("Received task result: {}", result);
+                tracing::info!("Received task result: {}", result);
                 return Ok(Some(result));
             }
             _ => {
-                println!("Received enexpected message {msg:?}");
+                tracing::error!("Received enexpected message {msg:?}");
             }
         }
     }
