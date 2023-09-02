@@ -1,5 +1,5 @@
 # scylla
-A naive approach to running arbitrary code on a remote system.
+A naive approach to running arbitrary rust code on a remote system.
 
 # how it works
 turn rust src into a tar.gz file -> send via tcp -> decompress -> run with cargo and communicate via stdin/out -> send results back over tcp
@@ -8,8 +8,8 @@ turn rust src into a tar.gz file -> send via tcp -> decompress -> run with cargo
 run `cargo run --bin node` and then run `cargo run --bin root` separately
 
 # what is done so far
-compression, sending, decompressing, and running tasks, requesting archives, and sending results back
+compression, sending, decompressing, and running tasks, requesting archives, and sending results back, logging
 
-# what needs to be done
-1-many communication, proper logging and error handling, and a better TaskResult struct that can handle more than just strings.
+# what needs to be done (in rough order)
+Conversion to a library, a better TaskResult struct that can handle more than just strings, and 1-many communication.
 
