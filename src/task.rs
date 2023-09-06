@@ -4,7 +4,7 @@ use crate::archive::load_uncompressed_archive;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct Task {
-    id: uuid::Uuid,
+    pub id: uuid::Uuid,
     pub archive_id: u64,
     binary_name: String,
     arguments: Vec<String>,

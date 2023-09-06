@@ -54,13 +54,14 @@ impl Message {
 pub enum Payload {
     Shutdown,
     Archive(crate::archive::Archive),
-    RequestArchive { id: u64 },
+    ArchiveRequest { id: u64 },
     ArchiveNotFound { id: u64 },
-    RunTask(crate::task::Task),
+    Task(crate::task::Task),
     TaskResult { result: String },
+    TaskCanceled { id: uuid::Uuid },
 }
 
-#[tracing::instrument(skip_all, name = "WRITE MESSAGES")]
+#[tracing::instrument(skip_all, name = "MESSAGE WRITER")]
 pub async fn write_messages(
     mut writer: tokio::io::BufWriter<OwnedWriteHalf>,
     mut rx: tokio::sync::mpsc::Receiver<Message>,
@@ -78,7 +79,7 @@ pub async fn write_messages(
     Ok(())
 }
 
-#[tracing::instrument(skip_all, name = "READ MESSAGES")]
+#[tracing::instrument(skip_all, name = "MESSAGE READER")]
 pub async fn read_messages(
     mut reader: tokio::io::BufReader<OwnedReadHalf>,
     tx: tokio::sync::mpsc::Sender<Message>,

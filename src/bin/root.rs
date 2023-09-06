@@ -79,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
         args.arguments.unwrap_or(vec![]),
     );
 
-    let payload = Payload::RunTask(task);
+    let payload = Payload::Task(task);
     let msg = Message::new(payload);
 
     tracing::info!("Sending task to node on {ip:?}");
@@ -103,7 +103,7 @@ async fn handle_messages(
 
     while let Some(msg) = read_queue.recv().await {
         match msg.payload {
-            Payload::RequestArchive { id } => {
+            Payload::ArchiveRequest { id } => {
                 tracing::info!("Received request for archive {}", id);
 
                 if scylla::archive::archive_exists(id) {
