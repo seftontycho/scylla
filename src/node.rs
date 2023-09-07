@@ -1,4 +1,4 @@
-use async_trait::async_trait;
+use std::collections::HashMap;
 
 use anyhow::Context;
 use tokio::{net::TcpStream, sync::mpsc};
@@ -6,69 +6,48 @@ use tokio::{net::TcpStream, sync::mpsc};
 use crate::{
     archive,
     connection::{read_messages, write_messages, Message, Payload},
+    task,
 };
 
-#[async_trait]
-pub trait TaskScheduler {
-    fn push(&mut self, task: crate::task::Task);
-    fn remove(&mut self, archive_id: u64) -> Vec<crate::task::Task>;
-    fn notify(&mut self, archive_id: u64);
+async fn run_tasks(
+    mut task_queue: mpsc::Receiver<crate::task::Task>,
+    write_queue: mpsc::Sender<Message>,
+) -> anyhow::Result<()> {
+    loop {
+        match task_queue.recv().await {
+            Some(task) => {
+                tracing::info!("Running task {:?}", task);
+                let msg = match task.run().await {
+                    Ok(result) => {
+                        tracing::info!("Task {:?} completed", task);
+                        Message::new(Payload::TaskResult { result })
+                    }
+                    Err(e) => {
+                        tracing::error!("Task {:?} failed with error {:?}", task, e);
+                        Message::new(Payload::TaskFailed { id: task.id })
+                    }
+                };
 
-    async fn next(&mut self) -> Option<crate::task::Task>;
-}
-
-pub struct FifoScheduler {
-    queue: std::collections::VecDeque<crate::task::Task>,
-    waiting: std::collections::HashMap<u64, Vec<crate::task::Task>>,
-}
-
-impl Default for FifoScheduler {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl TaskScheduler for FifoScheduler {
-    fn push(&self, task: crate::task::Task) {
-        self.queue.push_back(task);
-    }
-
-    fn remove(&self, archive_id: u64) -> Vec<crate::task::Task> {
-        let mut tasks = Vec::new();
-
-        self.queue.retain(|task| {
-            if task.archive_id == archive_id {
-                tasks.push(task.clone());
-                false
-            } else {
-                true
+                write_queue
+                    .send(msg)
+                    .await
+                    .context("Failed to add message to write queue")?;
             }
-        });
-
-        tasks
-    }
-
-    fn notify(&self, archive_id: u64) {
-        if let Some(tasks) = self.waiting.remove(&archive_id) {
-            self.queue.extend(tasks);
-        }
-    }
-
-    async fn next(&self) -> Option<crate::task::Task> {
-        self.queue.pop_front()
+            None => {
+                tracing::info!("Task queue closed");
+                break Ok(());
+            }
+        };
     }
 }
 
-struct Node<T: TaskScheduler> {
-    scheduler: T,
+struct Node {
     address: std::net::SocketAddr,
 }
 
-impl<T: TaskScheduler + Default> Node<T> {
+impl Node {
     pub fn new<S: std::net::ToSocketAddrs>(address: S) -> anyhow::Result<Self> {
         Ok(Self {
-            scheduler: Default::default(),
             address: address
                 .to_socket_addrs()?
                 .next()
@@ -81,7 +60,10 @@ impl<T: TaskScheduler + Default> Node<T> {
         &self,
         mut read_queue: mpsc::Receiver<Message>,
         write_queue: mpsc::Sender<Message>,
+        task_queue: mpsc::Sender<crate::task::Task>,
     ) -> anyhow::Result<()> {
+        let mut waiting: HashMap<u64, Vec<crate::task::Task>> = HashMap::new();
+
         while let Some(msg) = read_queue.recv().await {
             match msg.payload {
                 Payload::Shutdown => {
@@ -90,7 +72,8 @@ impl<T: TaskScheduler + Default> Node<T> {
                 }
                 Payload::Archive(archive) => {
                     tracing::info!("Received archive");
-                    self.handle_archive(archive).await?;
+                    self.handle_archive(archive, &mut waiting, task_queue.clone())
+                        .await?;
                 }
                 Payload::ArchiveRequest { id } => {
                     tracing::info!("Received archive request");
@@ -98,12 +81,15 @@ impl<T: TaskScheduler + Default> Node<T> {
                 }
                 Payload::ArchiveNotFound { id } => {
                     tracing::info!("Received archive not found");
-                    self.handle_archive_not_found(id, write_queue.clone())
+                    self.handle_archive_not_found(id, &mut waiting, write_queue.clone())
                         .await?;
                 }
                 Payload::Task(task) => {
                     tracing::info!("Received task");
-                    todo!();
+                    task_queue
+                        .send(task)
+                        .await
+                        .context("Failed to add task to queue")?;
                 }
                 Payload::TaskResult { result } => {
                     tracing::info!("Received task result");
@@ -118,12 +104,24 @@ impl<T: TaskScheduler + Default> Node<T> {
         Ok(())
     }
 
-    async fn handle_archive(&self, archive: archive::Archive) -> anyhow::Result<()> {
+    async fn handle_archive(
+        &self,
+        archive: archive::Archive,
+        waiting: &mut HashMap<u64, Vec<crate::task::Task>>,
+        task_queue: mpsc::Sender<crate::task::Task>,
+    ) -> anyhow::Result<()> {
         let exists = archive::archive_exists(archive.id);
         archive::store_archive(&archive).await?;
 
         if !exists {
-            self.scheduler.notify(archive.id);
+            if let Some(tasks) = waiting.remove(&archive.id) {
+                for task in tasks {
+                    task_queue
+                        .send(task)
+                        .await
+                        .context("Failed to add task to queue")?;
+                }
+            }
         }
 
         Ok(())
@@ -149,9 +147,10 @@ impl<T: TaskScheduler + Default> Node<T> {
     async fn handle_archive_not_found(
         &self,
         id: u64,
+        waiting: &mut HashMap<u64, Vec<crate::task::Task>>,
         write_queue: mpsc::Sender<Message>,
     ) -> anyhow::Result<()> {
-        let tasks = self.scheduler.remove(id);
+        let tasks = waiting.remove(&id).unwrap_or_default();
 
         for task in tasks {
             tracing::warn!("Archive {} not found, canceling task {:?}", id, task);
@@ -175,6 +174,7 @@ impl<T: TaskScheduler + Default> Node<T> {
 
         let (read_queue_tx, read_queue_rx) = mpsc::channel::<Message>(32);
         let (write_queue_tx, write_queue_rx) = mpsc::channel::<Message>(32);
+        let (task_queue_tx, task_queue_rx) = mpsc::channel::<crate::task::Task>(32);
 
         let read_task = tokio::task::spawn(async move {
             match read_messages(reader, read_queue_tx).await {
@@ -190,11 +190,22 @@ impl<T: TaskScheduler + Default> Node<T> {
             };
         });
 
-        self.handle_messages(read_queue_rx, write_queue_tx).await?;
+        let write_queue = write_queue_tx.clone();
+
+        let run_task = tokio::task::spawn(async move {
+            match run_tasks(task_queue_rx, write_queue).await {
+                Ok(_) => tracing::info!("Task queue closed"),
+                Err(e) => tracing::error!("Task queue closed with error: {:?}", e),
+            };
+        });
+
+        self.handle_messages(read_queue_rx, write_queue_tx, task_queue_tx)
+            .await?;
 
         // join the read and write tasks
         read_task.await?;
         write_task.await?;
+        run_task.await?;
 
         Ok(())
     }
@@ -225,4 +236,3 @@ mod test {
         let node = Node::new(address);
     }
 }
-schedul
