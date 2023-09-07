@@ -59,6 +59,7 @@ pub enum Payload {
     Task(crate::task::Task),
     TaskResult { result: String },
     TaskCanceled { id: uuid::Uuid },
+    TaskFailed { id: uuid::Uuid },
 }
 
 #[tracing::instrument(skip_all, name = "MESSAGE WRITER")]
