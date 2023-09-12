@@ -54,10 +54,11 @@ impl Message {
 pub enum Payload {
     Shutdown,
     Archive(crate::archive::Archive),
-    RequestArchive { id: u64 },
+    ArchiveRequest { id: u64 },
     ArchiveNotFound { id: u64 },
-    RunTask(crate::task::Task),
+    Task(crate::task::Task),
     TaskResult { result: String },
+    TaskFailed { id: u64 },
 }
 
 #[tracing::instrument(skip_all, name = "WRITE MESSAGES")]

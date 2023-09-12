@@ -78,7 +78,7 @@ async fn handle_messages(
                         .context("Failed to add message to write queue")?;
                 }
             }
-            scylla::connection::Payload::RunTask(task) => {
+            scylla::connection::Payload::Task(task) => {
                 tracing::info!("Received task: {:?}", task);
                 if scylla::archive::archive_exists(task.archive_id) {
                     tracing::info!("Archive found, running task: {:?}", task);
@@ -101,7 +101,7 @@ async fn handle_messages(
                     );
 
                     let msg = scylla::connection::Message::new(
-                        scylla::connection::Payload::RequestArchive {
+                        scylla::connection::Payload::ArchiveRequest {
                             id: task.archive_id,
                         },
                     );
