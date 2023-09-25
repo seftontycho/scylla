@@ -33,6 +33,14 @@ impl Task {
             .output()
             .await?;
 
+        tracing::debug!("build_output: {:?}", build_output);
+
         Ok(String::from_utf8_lossy(&build_output.stdout).to_string())
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct TaskResult {
+    pub id: uuid::Uuid,
+    pub result: String,
 }

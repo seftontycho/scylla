@@ -5,10 +5,11 @@ use tokio::{
     net::tcp::{OwnedReadHalf, OwnedWriteHalf},
 };
 
+use crate::task::TaskResult;
+
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[non_exhaustive]
 pub struct Message {
-    // metadata: Metadata,
     pub payload: Payload,
 }
 
@@ -57,7 +58,7 @@ pub enum Payload {
     ArchiveRequest { id: u64 },
     ArchiveNotFound { id: u64 },
     Task(crate::task::Task),
-    TaskResult { result: String },
+    TaskResult { result: TaskResult },
     TaskCanceled { id: uuid::Uuid },
     TaskFailed { id: uuid::Uuid },
 }

@@ -1,128 +1,238 @@
-use anyhow::Context;
 use std::collections::HashMap;
-use tokio::net::TcpListener;
-use tokio::sync::mpsc;
 
-use scylla::connection::{read_messages, write_messages};
+use anyhow::Context;
+use clap::Parser;
+use tokio::{net::TcpStream, sync::mpsc};
+
+use scylla::{
+    archive,
+    connection::{read_messages, write_messages, Message, Payload},
+    task::TaskResult,
+};
+
+#[derive(Parser)]
+struct Args {
+    #[clap(short, long)]
+    address: String,
+}
 
 #[tokio::main]
-#[tracing::instrument(skip_all)]
 async fn main() -> anyhow::Result<()> {
-    let subscriber = tracing_subscriber::fmt().with_target(false).finish();
+    tracing_subscriber::FmtSubscriber::builder()
+        .pretty()
+        .with_line_number(false)
+        .with_file(false)
+        .init();
 
-    tracing::subscriber::set_global_default(subscriber)?;
+    let args = Args::parse();
 
+    tracing::info!("Starting node on {}", args.address);
+    let node = Node::new(args.address).context("Failed to create node")?;
+    node.run().await?;
+
+    Ok(())
+}
+
+#[tracing::instrument(skip_all, name = "TASK RUNNER")]
+async fn run_tasks(
+    mut task_queue: mpsc::Receiver<scylla::task::Task>,
+    write_queue: mpsc::Sender<Message>,
+) -> anyhow::Result<()> {
     loop {
-        let listener = TcpListener::bind("127.0.0.1:8080").await?;
-        let (stream, addr) = listener.accept().await.context("Failed to accept tcp")?;
-        tracing::info!("New incoming connection on {}", addr);
+        match task_queue.recv().await {
+            Some(task) => {
+                tracing::info!("Running {:?}", task);
+                let msg = match task.run().await {
+                    Ok(result) => {
+                        tracing::info!("{:?} completed", task);
+                        Message::new(Payload::TaskResult {
+                            result: TaskResult {
+                                id: task.id,
+                                result,
+                            },
+                        })
+                    }
+                    Err(e) => {
+                        tracing::error!("{:?} failed with error {:?}", task, e);
+                        Message::new(Payload::TaskFailed { id: task.id })
+                    }
+                };
 
-        let (read, write) = stream.into_split();
-
-        let reader = tokio::io::BufReader::new(read);
-        let writer = tokio::io::BufWriter::new(write);
-
-        let (read_queue_tx, read_queue_rx) = mpsc::channel::<scylla::connection::Message>(32);
-        let (write_queue_tx, write_queue_rx) = mpsc::channel::<scylla::connection::Message>(32);
-
-        let read_task = tokio::task::spawn(async move {
-            match read_messages(reader, read_queue_tx).await {
-                Ok(_) => tracing::info!("Read connection closed"),
-                Err(e) => tracing::error!("Read connection closed with error: {:?}", e),
-            };
-        });
-
-        let write_task = tokio::task::spawn(async move {
-            match write_messages(writer, write_queue_rx).await {
-                Ok(_) => tracing::info!("Write connection closed"),
-                Err(e) => tracing::error!("Write connection closed with error: {:?}", e),
-            };
-        });
-
-        handle_messages(read_queue_rx, write_queue_tx).await?;
-
-        // join the read and write tasks
-        read_task.await?;
-        write_task.await?;
+                write_queue
+                    .send(msg)
+                    .await
+                    .context("Failed to add message to write queue")?;
+            }
+            None => {
+                break Ok(());
+            }
+        };
     }
 }
 
-#[tracing::instrument(skip_all, name = "HANDLE MESSAGES")]
+pub struct Node {
+    address: std::net::SocketAddr,
+}
+
+impl Node {
+    pub fn new<S: std::net::ToSocketAddrs>(address: S) -> anyhow::Result<Self> {
+        Ok(Self {
+            address: address
+                .to_socket_addrs()?
+                .next()
+                .context("No valid address")?,
+        })
+    }
+
+    pub async fn run(&self) -> anyhow::Result<()> {
+        let listener = tokio::net::TcpListener::bind(self.address)
+            .await
+            .context("Failed to bind to address")?;
+
+        loop {
+            let (stream, addr) = listener.accept().await?;
+            tracing::info!("Accepted connection from {}", addr);
+
+            step(stream).await?;
+        }
+    }
+}
+
+#[tracing::instrument(skip_all, name = "MESSAGE HANDLER")]
 async fn handle_messages(
-    mut read_queue: mpsc::Receiver<scylla::connection::Message>,
-    write_queue: mpsc::Sender<scylla::connection::Message>,
+    mut read_queue: mpsc::Receiver<Message>,
+    write_queue: mpsc::Sender<Message>,
+    task_queue: mpsc::Sender<scylla::task::Task>,
 ) -> anyhow::Result<()> {
-    let mut task_queue: HashMap<u64, scylla::task::Task> = HashMap::new();
+    let mut waiting: HashMap<u64, Vec<scylla::task::Task>> = HashMap::new();
 
     while let Some(msg) = read_queue.recv().await {
         match msg.payload {
-            scylla::connection::Payload::Archive(archive) => {
-                tracing::info!("Received archive: {}", archive.id);
-                scylla::archive::store_archive(&archive).await?;
-
-                if let Some(task) = task_queue.get(&archive.id) {
-                    tracing::info!("Running waiting task for archive {}", archive.id);
-                    let result = task.run().await?;
-
-                    tracing::info!("Sending task {:?} result", task);
-                    task_queue.remove(&archive.id);
-
-                    let msg =
-                        scylla::connection::Message::new(scylla::connection::Payload::TaskResult {
-                            result,
-                        });
-
-                    write_queue
-                        .send(msg)
-                        .await
-                        .context("Failed to add message to write queue")?;
-                }
-            }
-            scylla::connection::Payload::Task(task) => {
-                tracing::info!("Received task: {:?}", task);
-                if scylla::archive::archive_exists(task.archive_id) {
-                    tracing::info!("Archive found, running task: {:?}", task);
-                    let result = task.run().await?;
-
-                    tracing::info!("Sending task {:?} result", task);
-                    let msg =
-                        scylla::connection::Message::new(scylla::connection::Payload::TaskResult {
-                            result,
-                        });
-
-                    write_queue
-                        .send(msg)
-                        .await
-                        .context("Failed to add message to write queue")?;
-                } else {
-                    tracing::info!(
-                        "Archive {:?} not found, requesting archive",
-                        task.archive_id
-                    );
-
-                    let msg = scylla::connection::Message::new(
-                        scylla::connection::Payload::ArchiveRequest {
-                            id: task.archive_id,
-                        },
-                    );
-
-                    task_queue.insert(task.archive_id, task);
-
-                    write_queue
-                        .send(msg)
-                        .await
-                        .context("Failed to add message to write queue")?;
-                }
-            }
-            scylla::connection::Payload::Shutdown => {
+            Payload::Shutdown => {
                 tracing::info!("Received shutdown");
                 return Ok(());
             }
-            _ => {
-                tracing::warn!("Received unknown message");
+            Payload::Archive(archive) => {
+                tracing::info!("Received archive");
+                handle_archive(archive, &mut waiting, task_queue.clone()).await?;
+            }
+            Payload::ArchiveNotFound { id } => {
+                tracing::info!("Received archive not found");
+                handle_archive_not_found(id, &mut waiting, write_queue.clone()).await?;
+            }
+            Payload::Task(task) => {
+                tracing::info!("Received task");
+
+                if archive::archive_exists(task.archive_id) {
+                    tracing::info!("Archive exists, queueing task: {}", task.id);
+
+                    task_queue
+                        .send(task)
+                        .await
+                        .context("Failed to add task to queue")?;
+                } else {
+                    tracing::info!("Archive does not exist, task {} is waiting", task.id);
+
+                    let msg = Message::new(Payload::ArchiveRequest {
+                        id: task.archive_id,
+                    });
+
+                    waiting.entry(task.archive_id).or_default().push(task);
+
+                    write_queue
+                        .send(msg)
+                        .await
+                        .context("Failed to add message to write queue")?;
+                }
+            }
+            msg => {
+                tracing::warn!("Recieved invalid message for remote node: {:?}", msg);
+            }
+        }
+
+        tracing::info!("Waiting: {:?}", waiting);
+    }
+
+    Ok(())
+}
+
+async fn handle_archive(
+    archive: archive::Archive,
+    waiting: &mut HashMap<u64, Vec<scylla::task::Task>>,
+    task_queue: mpsc::Sender<scylla::task::Task>,
+) -> anyhow::Result<()> {
+    let exists = archive::archive_exists(archive.id);
+    archive::store_archive(&archive).await?;
+
+    if !exists {
+        if let Some(tasks) = waiting.remove(&archive.id) {
+            for task in tasks {
+                task_queue
+                    .send(task)
+                    .await
+                    .context("Failed to add task to queue")?;
             }
         }
     }
+
+    Ok(())
+}
+
+async fn handle_archive_not_found(
+    id: u64,
+    waiting: &mut HashMap<u64, Vec<scylla::task::Task>>,
+    write_queue: mpsc::Sender<Message>,
+) -> anyhow::Result<()> {
+    let tasks = waiting.remove(&id).unwrap_or_default();
+
+    for task in tasks {
+        tracing::warn!("Archive {} not found, canceling task {:?}", id, task);
+
+        let msg = Message::new(Payload::TaskCanceled { id: task.id });
+
+        write_queue
+            .send(msg)
+            .await
+            .context("Failed to add message to write queue")?;
+    }
+
+    Ok(())
+}
+
+async fn step(stream: TcpStream) -> anyhow::Result<()> {
+    let (read, write) = stream.into_split();
+
+    let reader = tokio::io::BufReader::new(read);
+    let writer = tokio::io::BufWriter::new(write);
+
+    let (read_queue_tx, read_queue_rx) = mpsc::channel::<Message>(32);
+    let (write_queue_tx, write_queue_rx) = mpsc::channel::<Message>(32);
+    let (task_queue_tx, task_queue_rx) = mpsc::channel::<scylla::task::Task>(32);
+
+    let read_task = tokio::task::spawn(async move {
+        match read_messages(reader, read_queue_tx).await {
+            Ok(_) => tracing::info!("Read handler closed"),
+            Err(e) => tracing::error!("Read handler closed with error: {:?}", e),
+        };
+    });
+
+    let write_task = tokio::task::spawn(async move {
+        match write_messages(writer, write_queue_rx).await {
+            Ok(_) => tracing::info!("Write handler closed"),
+            Err(e) => tracing::error!("Write handler closed with error: {:?}", e),
+        };
+    });
+
+    let write_queue = write_queue_tx.clone();
+
+    let run_task = tokio::task::spawn(async move {
+        match run_tasks(task_queue_rx, write_queue).await {
+            Ok(_) => tracing::info!("Task handler closed"),
+            Err(e) => tracing::error!("Task handler closed with error: {:?}", e),
+        };
+    });
+
+    handle_messages(read_queue_rx, write_queue_tx, task_queue_tx).await?;
 
     Ok(())
 }
